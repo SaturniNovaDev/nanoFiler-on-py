@@ -1,5 +1,5 @@
 import tkinter as tk, os, string, threading, queue
-from tkinter import filedialog, messagebox as msgbox
+from tkinter import filedialog, messagebox as msgbox, ttk
 from PIL import Image, ImageTk
 from appinfo import version
 from ctypes import windll
@@ -16,6 +16,22 @@ root.grid_columnconfigure(1, weight=85)
 windll.shcore.SetProcessDpiAwareness(1)
 
 indexed_subdirs = {}
+indexing_queue = queue.Queue()
+
+# Add these globals
+total_to_index = 0
+
+# --- Status Bar with Progressbar ---
+status_bar_frame = tk.Frame(root, bd=1, relief=tk.SUNKEN)
+status_bar_frame.grid(row=2, column=0, columnspan=2, sticky="ew")
+status_bar_frame.grid_propagate(False)
+
+progress_var = tk.DoubleVar()
+progress_bar = ttk.Progressbar(status_bar_frame, variable=progress_var, maximum=1.0, length=200)
+progress_bar.pack(side=tk.LEFT, padx=10, pady=2)
+
+status_label = tk.Label(status_bar_frame, anchor="w", font=("Consolas", 11))
+status_label.pack(side=tk.LEFT, padx=10)
 
 
 def get_windows_drives():
@@ -45,22 +61,45 @@ def get_folder_contents(drive, path=""):
         return [], []
 
 
+def update_status_bar():
+    global total_to_index
+    done = len(indexed_subdirs)
+    # Avoid division by zero
+    progress = done / total_to_index if total_to_index > 0 else 0
+    progress_var.set(progress)
+    current_path = path_explorer_entry.get()
+    status_text = (
+        f"Indexed: {done}/{total_to_index} | "
+        f"Current Path: {current_path} | "
+        f"Version:{version}"
+    )
+    status_label.config(text=status_text)
+    root.after(200, update_status_bar)
+
+
 def index_subdirs_background(parent_path):
-    """Scan subdirectories of each immediate subdir in parent_path in background."""
+    global total_to_index, indexed_subdirs
+    # Reset for new navigation
+    indexed_subdirs.clear()
+    total_to_index = 0
     try:
+        subdirs = []
         with os.scandir(parent_path) as it:
             for entry in it:
                 if entry.is_dir():
-                    subdir_path = os.path.join(parent_path, entry.name)
-                    threading.Thread(
-                        target=index_single_subdir, args=(subdir_path,), daemon=True
-                    ).start()
+                    subdirs.append(entry.name)
+        total_to_index = len(subdirs)
+        for subdir in subdirs:
+            subdir_path = os.path.join(parent_path, subdir)
+            threading.Thread(
+                target=index_single_subdir, args=(subdir_path,), daemon=True
+            ).start()
     except Exception:
-        pass
+        total_to_index = 0
 
 
 def index_single_subdir(subdir_path):
-    """Index immediate subdirs/files of subdir_path and store in indexed_subdirs."""
+    """Index immediate subdirs/files of subdir_path and put result in queue."""
     try:
         subdirs, files = [], []
         with os.scandir(subdir_path) as it:
@@ -69,21 +108,18 @@ def index_single_subdir(subdir_path):
                     subdirs.append(entry.name)
                 elif entry.is_file():
                     files.append(entry.name)
-        indexed_subdirs[subdir_path] = (subdirs, files)
+        indexing_queue.put((subdir_path, subdirs, files))
     except Exception:
-        indexed_subdirs[subdir_path] = ([], [])
+        indexing_queue.put((subdir_path, [], []))
 
 
 def dismount_drive():
-    # Re-enable drives listbox, disable subdirs listbox, clear path explorer
     drives_listbox.config(state=tk.NORMAL)
     subdirs_listbox.config(state=tk.DISABLED)
     subdirs_listbox.delete(0, tk.END)
     subdirs_listbox.insert(tk.END, "Select a drive to view its contents.")
     update_path_explorer("")
-    # Unbind subdirs_listbox event
     subdirs_listbox.unbind("<<ListboxSelect>>")
-    # Rebind drives_listbox event
     drives_listbox.bind("<<ListboxSelect>>", on_drive_select)
 
 
@@ -108,10 +144,8 @@ def on_drive_select(event):
             target=index_subdirs_background, args=(selected_drive,), daemon=True
         ).start()
     subdirs_listbox.config(state=tk.NORMAL)
-    # Disable drives listbox and unbind its event
     drives_listbox.config(state=tk.DISABLED)
     drives_listbox.unbind("<<ListboxSelect>>")
-    # Bind subdirs_listbox event
     subdirs_listbox.bind("<<ListboxSelect>>", on_subdir_select)
 
 
@@ -124,7 +158,6 @@ def on_subdir_select(event):
     if selected_item.startswith("[DIR] "):
         selected_dir = selected_item[6:]
         current_drive_indices = drives_listbox.curselection()
-        # Find the currently selected drive (since drives_listbox is disabled, use stored path)
         current_path = path_explorer_entry.get()
         if current_path:
             new_path = os.path.join(current_path, selected_dir)
@@ -145,7 +178,6 @@ def on_subdir_select(event):
             subdirs_listbox.config(state=tk.NORMAL)
     elif selected_item.startswith("[FILE] "):
         selected_file = selected_item[7:]
-        # You can call your file display logic here
 
 
 def on_file_select(event):
@@ -264,7 +296,6 @@ def browse_to_path(event=None):
                 target=index_subdirs_background, args=(path,), daemon=True
             ).start()
         subdirs_listbox.config(state=tk.NORMAL)
-        # Unbind drives_listbox, bind subdirs_listbox
         drives_listbox.config(state=tk.DISABLED)
         drives_listbox.unbind("<<ListboxSelect>>")
         subdirs_listbox.bind("<<ListboxSelect>>", on_subdir_select)
@@ -278,7 +309,6 @@ def clear_path_entry():
     subdirs_listbox.delete(0, tk.END)
     subdirs_listbox.insert(tk.END, "Select a drive to view its contents.")
     subdirs_listbox.config(state=tk.DISABLED)
-    # Optionally, re-enable drives_listbox
     drives_listbox.config(state=tk.NORMAL)
     drives_listbox.bind("<<ListboxSelect>>", on_drive_select)
     subdirs_listbox.unbind("<<ListboxSelect>>")
@@ -287,6 +317,14 @@ def clear_path_entry():
 def update_path_explorer(path):
     path_explorer_entry.delete(0, tk.END)
     path_explorer_entry.insert(0, path)
+
+
+def process_indexing_queue():
+    while not indexing_queue.empty():
+        subdir_path, subdirs, files = indexing_queue.get()
+        indexed_subdirs[subdir_path] = (subdirs, files)
+        # Optionally, update UI here if you want to show live results
+    root.after(100, process_indexing_queue)
 
 
 drives_frame = tk.Frame(root, width=150, bd=2, relief=tk.SUNKEN)
@@ -361,9 +399,11 @@ path_explorer_entry.bind("<Return>", browse_to_path)
 clear_entry_btn = tk.Button(path_explorer_frame, text="Clear", command=clear_path_entry)
 clear_entry_btn.pack(side=tk.LEFT, padx=5)
 
-# On startup, only drives_listbox is enabled and bound
 drives_listbox.bind("<<ListboxSelect>>", on_drive_select)
 subdirs_listbox.config(state=tk.DISABLED)
 subdirs_listbox.unbind("<<ListboxSelect>>")
+
+process_indexing_queue()
+update_status_bar()
 
 root.mainloop()
