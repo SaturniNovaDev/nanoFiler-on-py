@@ -7,7 +7,7 @@ import os
 import string
 import time
 import threading
-from typing import TypedDict, Union, Optional, Callable
+from typing import TypedDict, Union, Optional, Callable, Tuple
 from tkinter import messagebox as msgbox, ttk
 from PIL import Image, ImageTk
 from __init__ import __version__
@@ -99,6 +99,9 @@ class NanoFilerApp(tk.Tk):
         self.is_focused: bool = True
         self.refresh_timer_id: Optional[str] = None  # Timer ID for self.after
 
+        # Reference image variable to avoid garbage collection from destroying images
+        self._current_image_tk: Optional[ImageTk.PhotoImage] = None
+
         # Live refreshing constants
         self.focused_refresh_ms = 10000  # 10 seconds
         self.unfocused_refresh_ms = 90000  # 1.5 minutes
@@ -159,7 +162,7 @@ class NanoFilerApp(tk.Tk):
         if not drives:
             self.drives_listbox.insert(
                 tk.END,
-                "No drives found! Check you have any storage devices connected and correctly " \
+                "No drives found! Check you have any storage devices connected and correctly "
                 "mounted.",
             )
             self.drives_listbox.config(state=tk.DISABLED)
@@ -184,7 +187,7 @@ class NanoFilerApp(tk.Tk):
         self.subdirs_scrollbar = tk.Scrollbar(self.subdirs_frame, orient=tk.VERTICAL)
         self.subdirs_scrollbar.grid(row=1, column=1, sticky="ns")
         self.subdirs_listbox.config(yscrollcommand=self.subdirs_scrollbar.set)
-        self.subdirs_scrollbar.config(command=self.subdirs_listbox.yview)
+        self.subdirs_scrollbar.config(command=self.subdirs_listbox.yview)  # type: ignore
         self.subdirs_listbox.config(exportselection=False)
         self.subdirs_listbox.insert(tk.END, "Select a drive to view its contents.")
         self.subdirs_listbox.config(state=tk.DISABLED)
@@ -370,16 +373,16 @@ class NanoFilerApp(tk.Tk):
         if self.current_dir and self.current_dir.path:
             path = self.current_dir.path
             # Async refresh: will update cache and UI via callback
-            self.async_get_dir(path, lambda dir_obj: self.update_ui_from_dir(dir_obj))
+            self.async_get_dir(path, self.update_ui_from_dir)
         # Reschedule next
         self.schedule_live_refresh()
 
-    def on_focus_in(self, event: tk.Event) -> None:
+    def on_focus_in(self, _event: tk.Event) -> None:
         """Handle window focus in: switch to faster refresh."""
         self.is_focused = True
         self.schedule_live_refresh()
 
-    def on_focus_out(self, event: tk.Event) -> None:
+    def on_focus_out(self, _event: tk.Event) -> None:
         """Handle window focus out: switch to slower refresh."""
         self.is_focused = False
         self.schedule_live_refresh()
@@ -418,40 +421,40 @@ class NanoFilerApp(tk.Tk):
                 tk.END, f"[FILE] {os.path.basename(file_obj.path)}"
             )
 
-    def on_drive_select(self, event: tk.Event) -> None:
+    def on_drive_select(self, _event: tk.Event) -> None:
         """Handles item selection from the drive browsing listbox."""
-        selected_indices = self.drives_listbox.curselection()
+        selected_indices: Tuple[int, ...] = self.drives_listbox.curselection()  # type: ignore
         if not selected_indices:
             return
-        selected_index = selected_indices[0]
-        selected_drive = self.drives_listbox.get(selected_index)
-        self.update_path_explorer(selected_drive)
+        selected_index = selected_indices[0]  # type: ignore
+        selected_drive = self.drives_listbox.get(selected_index)  # type: ignore
+        self.update_path_explorer(selected_drive)  # type: ignore
         self.show_loading_state()
         self.drives_listbox.config(state=tk.DISABLED)
         self.drives_listbox.unbind("<<ListboxSelect>>")
         # Async load
         self.async_get_dir(
-            selected_drive, lambda dir_obj: self.update_ui_from_dir(dir_obj)
+            selected_drive, self.update_ui_from_dir  # type: ignore
         )
 
-    def on_item_select(self, event: tk.Event, parent_dir_obj: Dir) -> None:
+    def on_item_select(self, _event: tk.Event, parent_dir_obj: Dir) -> None:
         """Handles item selection from the file browsing listbox."""
-        selected_indices = self.subdirs_listbox.curselection()
+        selected_indices: Tuple[int, ...] = self.subdirs_listbox.curselection()  # type: ignore
         if not selected_indices:
             return
-        selected_index = selected_indices[0]
-        selected_item = self.subdirs_listbox.get(selected_index)
-        if selected_item.startswith("[DIR] "):
-            selected_dir_name = selected_item[6:]
-            new_path = os.path.join(parent_dir_obj.path, selected_dir_name)
+        selected_index = selected_indices[0]  # type: ignore
+        selected_item = self.subdirs_listbox.get(selected_index)  # type: ignore
+        if selected_item.startswith("[DIR] "):  # type: ignore
+            selected_dir_name: str = selected_item[6:]  # type: ignore
+            new_path = os.path.join(parent_dir_obj.path, selected_dir_name)  # type: ignore
             self.update_path_explorer(new_path)
             self.show_loading_state()
             # Async load new path
             self.async_get_dir(
-                new_path, lambda dir_obj: self.update_ui_from_dir(dir_obj)
+                new_path, self.update_ui_from_dir
             )
-        elif selected_item.startswith("[FILE] "):
-            selected_file_name = selected_item[7:]
+        elif selected_item.startswith("[FILE] "):  # type: ignore
+            selected_file_name = selected_item[7:]  # type: ignore
             for file_obj in parent_dir_obj.files.values():
                 if os.path.basename(file_obj.path) == selected_file_name:
                     self.display_file(file_obj)
@@ -470,7 +473,7 @@ class NanoFilerApp(tk.Tk):
             self.display_unsupported_file(os.path.basename(file_obj.path))
 
     def display_text_file(self, file_path: str) -> None:
-        """Opens the specified file using python's default `open` method and reads the 
+        """Opens the specified file using python's default `open` method and reads the
         file, then displays it in a text area."""
         text_viewer = tk.Text(self.text_viewer_frame, wrap=tk.WORD)
         text_viewer.pack(fill=tk.BOTH, expand=True)
@@ -489,12 +492,14 @@ class NanoFilerApp(tk.Tk):
 
     def display_image_file(self, file_path: str) -> None:
         """Displays an image file using `ImageTk`."""
+        for widget in self.text_viewer_frame.winfo_children():
+            widget.destroy()  # Ensure existing widgets are cleared
+
         try:
             img = Image.open(file_path)
             img.thumbnail((600, 500))
-            img_tk = ImageTk.PhotoImage(img)
-            img_label = tk.Label(self.text_viewer_frame, image=img_tk)
-            img_label.image = img_tk
+            self._current_image_tk = ImageTk.PhotoImage(img) # Store the reference on 'self'
+            img_label = tk.Label(self.text_viewer_frame, image=self._current_image_tk)
             img_label.pack(fill=tk.BOTH, expand=True)
             self.text_viewer_label.config(
                 text=f"Viewing Image File: {os.path.basename(file_path)}"
@@ -515,7 +520,7 @@ class NanoFilerApp(tk.Tk):
         )
         message_label.pack(pady=20)
 
-    def browse_to_path(self, event:Optional[tk.Event]=None) -> None:
+    def browse_to_path(self, _event: Optional[tk.Event] = None) -> None:
         """Checks if the entered path exists before getting the dir."""
         path = self.path_explorer_entry.get()
         if not path or not os.path.exists(path):
@@ -530,7 +535,7 @@ class NanoFilerApp(tk.Tk):
         self.drives_listbox.config(state=tk.DISABLED)
         self.drives_listbox.unbind("<<ListboxSelect>>")
         # Async load
-        self.async_get_dir(path, lambda dir_obj: self.update_ui_from_dir(dir_obj))
+        self.async_get_dir(path, self.update_ui_from_dir)
 
     def clear_path_entry(self) -> None:
         """Clears the path explorer and resets the file browsing frames when
@@ -545,7 +550,7 @@ class NanoFilerApp(tk.Tk):
         self.subdirs_listbox.unbind("<<ListboxSelect>>")
 
     def update_path_explorer(self, path: str) -> None:
-        """Update the path explorer to show the current path. Called when a new 
+        """Update the path explorer to show the current path. Called when a new
         location is selected."""
         self.path_explorer_entry.delete(0, tk.END)
         self.path_explorer_entry.insert(0, path)
