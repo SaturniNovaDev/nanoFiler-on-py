@@ -7,7 +7,7 @@ import string
 import time
 import threading
 from typing import TypedDict, Union, Optional, Callable
-from tkinter import messagebox as msgbox
+from tkinter import messagebox as msgbox, ttk
 from PIL import Image, ImageTk
 from __init__ import __version__
 
@@ -142,7 +142,9 @@ def get_mimetype(file_name: str) -> str:
         ".bat",
         ".cmd",
         ".sh",
+        ".ps1",
         ".rtf",
+        ".git",
     }
     image_extensions = {".png", ".jpg", ".jpeg", ".bmp", ".gif", ".tiff"}
 
@@ -158,10 +160,13 @@ def scan_dir(path: str) -> Dir:
     """Synchronous scan to create a Dir object (with timestamps). Called from thread."""
     subdirs: dict[int, str] = {}
     files: dict[int, File] = {}
+    metadata: Union[
+        DirMetadata, DirErrorMetadata
+    ]  # Declare outside: always defined, union type
     try:
         # Get dir-level timestamps first
         dir_stat = os.stat(path)
-        dir_created = time.ctime(dir_stat.st_ctime)
+        dir_created = time.ctime(dir_stat.st_birthtime)
         dir_modified = time.ctime(dir_stat.st_mtime)
 
         with os.scandir(path) as it:
@@ -177,7 +182,7 @@ def scan_dir(path: str) -> Dir:
                     size = stat.st_size
                     mimetype = get_mimetype(entry.name)
                     file_metadata: FileMetadata = {
-                        "created": time.ctime(stat.st_ctime),
+                        "created": time.ctime(stat.st_birthtime),
                         "modified": time.ctime(stat.st_mtime),
                     }
                     files[file_idx] = File(
@@ -188,14 +193,18 @@ def scan_dir(path: str) -> Dir:
                         content="",
                     )
                     file_idx += 1
-        metadata: DirMetadata = {
+        # Assign after successful scan (type checker infers DirMetadata)
+        metadata = {
             "count_subdirs": len(subdirs),
             "count_files": len(files),
             "created": dir_created,
             "modified": dir_modified,
         }
     except Exception as e:
-        metadata: DirErrorMetadata = {"error": str(e)}
+        # On error, reset to empty state and set error metadata (infers DirErrorMetadata)
+        subdirs = {}
+        files = {}
+        metadata = {"error": str(e)}
     return Dir(path=path, metadata=metadata, subdirs=subdirs, files=files)
 
 
@@ -428,6 +437,7 @@ def clear_path_entry() -> None:
 
 
 def update_path_explorer(path: str) -> None:
+    """Update the path explorer to show the current path. Called when a new location is selected."""
     path_explorer_entry.delete(0, tk.END)
     path_explorer_entry.insert(0, path)
 
