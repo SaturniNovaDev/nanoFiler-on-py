@@ -1,37 +1,142 @@
-import tkinter as tk, os, string, threading, queue
-from tkinter import filedialog, messagebox as msgbox, ttk
-from PIL import Image, ImageTk
-from appinfo import version
+"""Main module from nanoFiler in Python."""
+
 from ctypes import windll
+import tkinter as tk
+import os
+import string
+import typing
+from tkinter import messagebox as msgbox, ttk
+from PIL import Image, ImageTk
+from __init__ import __version__
 
 root = tk.Tk()
-root.title("NanoFiler" + version)
+root.title("NanoFiler" + __version__)
 root.geometry("900x700")
 
 root.grid_rowconfigure(0, weight=15)
 root.grid_rowconfigure(1, weight=85)
 root.grid_columnconfigure(0, weight=15)
 root.grid_columnconfigure(1, weight=85)
-
 windll.shcore.SetProcessDpiAwareness(1)
 
-indexed_subdirs = {}
-indexing_queue = queue.Queue()
 
-# Add these globals
-total_to_index = 0
+class File:
+    """File representation with metadata, size, mimetype, and content.
 
-# --- Status Bar with Progressbar ---
+    Mimetype is declared early to help with file handling decisions.
+    For example, we cannot display images as text, so we need to know the mimetype
+    before attempting to read the content.
+    Content is loaded on demand for efficiency.
+    """
+
+    def __init__(
+        self,
+        path: str,
+        metadata: dict[str, typing.Any],
+        size: int,
+        mimetype: str,
+        content: str = "",  # Empty by default; load on demand
+    ):
+        self.path = path
+        self.metadata = metadata
+        self.size = size
+        self.content = content
+        self.mimetype = mimetype
+
+
+class Dir:
+    """Directory representation with metadata, subdirs, and files."""
+
+    def __init__(
+        self,
+        path: str,
+        metadata: dict[str, typing.Any],
+        subdirs: dict[int, str],
+        files: dict[int, File],
+    ):
+        self.path = path
+        self.metadata = metadata
+        self.subdirs = subdirs
+        self.files = files
+
+
+# --- Status Bar (simplified, removed unused indexing progress) ---
 status_bar_frame = tk.Frame(root, bd=1, relief=tk.SUNKEN)
 status_bar_frame.grid(row=2, column=0, columnspan=2, sticky="ew")
 status_bar_frame.grid_propagate(False)
 
-progress_var = tk.DoubleVar()
-progress_bar = ttk.Progressbar(status_bar_frame, variable=progress_var, maximum=1.0, length=200)
-progress_bar.pack(side=tk.LEFT, padx=10, pady=2)
-
 status_label = tk.Label(status_bar_frame, anchor="w", font=("Consolas", 11))
-status_label.pack(side=tk.LEFT, padx=10)
+status_label.pack(side=tk.LEFT, padx=10, pady=2)
+
+
+def update_status_bar():
+    current_path = path_explorer_entry.get()
+    status_text = f"Current Path: {current_path} | " f"Version: {__version__}"
+    status_label.config(text=status_text)
+    root.after(200, update_status_bar)
+
+
+def get_mimetype(file_name: str) -> str:
+    """Simple mimetype detection based on file extension."""
+    extension = os.path.splitext(file_name)[1].lower()
+    text_extensions = {
+        ".txt",
+        ".md",
+        ".py",
+        ".log",
+        ".json",
+        ".xml",
+        ".csv",
+        ".ini",
+        ".css",
+        ".html",
+        ".js",
+        ".yaml",
+        ".yml",
+        ".bat",
+        ".cmd",
+        ".sh",
+        ".rtf",
+    }
+    image_extensions = {".png", ".jpg", ".jpeg", ".bmp", ".gif", ".tiff"}
+
+    if extension in text_extensions:
+        return "text/plain"
+    elif extension in image_extensions:
+        return "image"
+    else:
+        return "unknown"
+
+
+def get_dir_object(path: str) -> Dir:
+    """Return a Dir object for the given path."""
+    subdirs = {}
+    files = {}
+    metadata = {}
+    try:
+        with os.scandir(path) as it:
+            subdir_idx = 0
+            file_idx = 0
+            for entry in it:
+                if entry.is_dir():
+                    subdirs[subdir_idx] = entry.name
+                    subdir_idx += 1
+                elif entry.is_file():
+                    file_path = os.path.join(path, entry.name)
+                    size = entry.stat().st_size
+                    mimetype = get_mimetype(entry.name)
+                    files[file_idx] = File(
+                        path=file_path,
+                        metadata={},
+                        size=size,
+                        mimetype=mimetype,
+                        content="",
+                    )
+                    file_idx += 1
+        metadata = {"count_subdirs": len(subdirs), "count_files": len(files)}
+    except Exception as e:
+        metadata = {"error": str(e)}
+    return Dir(path=path, metadata=metadata, subdirs=subdirs, files=files)
 
 
 def get_windows_drives():
@@ -43,84 +148,19 @@ def get_windows_drives():
     return drives
 
 
-def get_folder_contents(drive, path=""):
-    full_path = os.path.join(drive, path)
-    try:
-        subdirs = []
-        files = []
-        with os.scandir(full_path) as it:
-            for entry in it:
-                if entry.is_dir():
-                    subdirs.append(entry.name)
-                elif entry.is_file():
-                    files.append(entry.name)
-        return subdirs, files
-    except PermissionError:
-        return [], []
-    except FileNotFoundError:
-        return [], []
-
-
-def update_status_bar():
-    global total_to_index
-    done = len(indexed_subdirs)
-    # Avoid division by zero
-    progress = done / total_to_index if total_to_index > 0 else 0
-    progress_var.set(progress)
-    current_path = path_explorer_entry.get()
-    status_text = (
-        f"Indexed: {done}/{total_to_index} | "
-        f"Current Path: {current_path} | "
-        f"Version:{version}"
-    )
-    status_label.config(text=status_text)
-    root.after(200, update_status_bar)
-
-
-def index_subdirs_background(parent_path):
-    global total_to_index, indexed_subdirs
-    # Reset for new navigation
-    indexed_subdirs.clear()
-    total_to_index = 0
-    try:
-        subdirs = []
-        with os.scandir(parent_path) as it:
-            for entry in it:
-                if entry.is_dir():
-                    subdirs.append(entry.name)
-        total_to_index = len(subdirs)
-        for subdir in subdirs:
-            subdir_path = os.path.join(parent_path, subdir)
-            threading.Thread(
-                target=index_single_subdir, args=(subdir_path,), daemon=True
-            ).start()
-    except Exception:
-        total_to_index = 0
-
-
-def index_single_subdir(subdir_path):
-    """Index immediate subdirs/files of subdir_path and put result in queue."""
-    try:
-        subdirs, files = [], []
-        with os.scandir(subdir_path) as it:
-            for entry in it:
-                if entry.is_dir():
-                    subdirs.append(entry.name)
-                elif entry.is_file():
-                    files.append(entry.name)
-        indexing_queue.put((subdir_path, subdirs, files))
-    except Exception:
-        indexing_queue.put((subdir_path, [], []))
-
-
-def dismount_drive():
-    drives_listbox.config(state=tk.NORMAL)
-    subdirs_listbox.config(state=tk.DISABLED)
-    subdirs_listbox.delete(0, tk.END)
-    subdirs_listbox.insert(tk.END, "Select a drive to view its contents.")
-    update_path_explorer("")
-    subdirs_listbox.unbind("<<ListboxSelect>>")
-    drives_listbox.bind("<<ListboxSelect>>", on_drive_select)
+def populate_listbox_from_dir(dir_obj: Dir, listbox: tk.Listbox):
+    """Populate the listbox with contents from a Dir object."""
+    listbox.delete(0, tk.END)
+    if dir_obj.metadata.get("error"):
+        listbox.insert(tk.END, f"Error: {dir_obj.metadata['error']}")
+        return
+    if not dir_obj.subdirs and not dir_obj.files:
+        listbox.insert(tk.END, "No accessible folders or files found.")
+        return
+    for idx, subdir in dir_obj.subdirs.items():
+        listbox.insert(tk.END, f"[DIR] {subdir}")
+    for idx, file_obj in dir_obj.files.items():
+        listbox.insert(tk.END, f"[FILE] {os.path.basename(file_obj.path)}")
 
 
 def on_drive_select(event):
@@ -130,130 +170,80 @@ def on_drive_select(event):
     selected_index = selected_indices[0]
     selected_drive = drives_listbox.get(selected_index)
     update_path_explorer(selected_drive)
+    dir_obj = get_dir_object(selected_drive)
     subdirs_listbox.config(state=tk.NORMAL)
-    subdirs_listbox.delete(0, tk.END)
-    subdirs, files = get_folder_contents(selected_drive)
-    if not subdirs and not files:
-        subdirs_listbox.insert(tk.END, "No accessible folders or files found.")
-    else:
-        for subdir in subdirs:
-            subdirs_listbox.insert(tk.END, f"[DIR] {subdir}")
-        for file in files:
-            subdirs_listbox.insert(tk.END, f"[FILE] {file}")
-        threading.Thread(
-            target=index_subdirs_background, args=(selected_drive,), daemon=True
-        ).start()
+    populate_listbox_from_dir(dir_obj, subdirs_listbox)
     subdirs_listbox.config(state=tk.NORMAL)
     drives_listbox.config(state=tk.DISABLED)
     drives_listbox.unbind("<<ListboxSelect>>")
-    subdirs_listbox.bind("<<ListboxSelect>>", on_subdir_select)
+    subdirs_listbox.bind("<<ListboxSelect>>", lambda e: on_item_select(e, dir_obj))
 
 
-def on_subdir_select(event):
+def on_item_select(event, parent_dir_obj: Dir):
     selected_indices = subdirs_listbox.curselection()
     if not selected_indices:
         return
     selected_index = selected_indices[0]
     selected_item = subdirs_listbox.get(selected_index)
     if selected_item.startswith("[DIR] "):
-        selected_dir = selected_item[6:]
-        current_drive_indices = drives_listbox.curselection()
-        current_path = path_explorer_entry.get()
-        if current_path:
-            new_path = os.path.join(current_path, selected_dir)
-            update_path_explorer(new_path)
-            subdirs_listbox.config(state=tk.NORMAL)
-            subdirs_listbox.delete(0, tk.END)
-            subdirs, files = get_folder_contents(current_path, selected_dir)
-            if not subdirs and not files:
-                subdirs_listbox.insert(tk.END, "No accessible folders or files found.")
-            else:
-                for subdir in subdirs:
-                    subdirs_listbox.insert(tk.END, f"[DIR] {subdir}")
-                for file in files:
-                    subdirs_listbox.insert(tk.END, f"[FILE] {file}")
-                threading.Thread(
-                    target=index_subdirs_background, args=(new_path,), daemon=True
-                ).start()
-            subdirs_listbox.config(state=tk.NORMAL)
+        selected_dir_name = selected_item[6:]
+        new_path = os.path.join(parent_dir_obj.path, selected_dir_name)
+        update_path_explorer(new_path)
+        dir_obj = get_dir_object(new_path)
+        subdirs_listbox.config(state=tk.NORMAL)
+        populate_listbox_from_dir(dir_obj, subdirs_listbox)
+        subdirs_listbox.config(state=tk.NORMAL)
+        # Rebind with the new dir_obj for further navigation
+        subdirs_listbox.bind("<<ListboxSelect>>", lambda e: on_item_select(e, dir_obj))
     elif selected_item.startswith("[FILE] "):
-        selected_file = selected_item[7:]
+        selected_file_name = selected_item[7:]
+        for file_obj in parent_dir_obj.files.values():
+            if os.path.basename(file_obj.path) == selected_file_name:
+                display_file(file_obj)
+                break
 
 
-def on_file_select(event):
-    current_drive_indices = drives_listbox.curselection()
-    if not current_drive_indices:
-        return
-    current_drive_index = current_drive_indices[0]
-    current_drive = drives_listbox.get(current_drive_index)
-    selected_indices = subdirs_listbox.curselection()
-    if not selected_indices:
-        return
-    selected_index = selected_indices[0]
-    selected_item = subdirs_listbox.get(selected_index)
-    if selected_item.startswith("[FILE] "):
-        selected_file = selected_item[7:]
-        file_extension = os.path.splitext(selected_file)[1].lower()
-        if file_extension in [
-            ".txt",
-            ".md",
-            ".py",
-            ".log",
-            ".json",
-            ".xml",
-            ".csv",
-            ".ini",
-            ".css",
-            ".html",
-            ".js",
-            ".yaml",
-            ".yml",
-            ".bat",
-            ".cmd",
-            ".sh",
-            ".rtf",
-        ]:
-            display_text_file(os.path.join(current_drive, selected_file))
-        elif file_extension in [".png", ".jpg", ".jpeg", ".bmp", ".gif", ".tiff"]:
-            display_image_file(os.path.join(current_drive, selected_file))
-        else:
-            display_unsupported_file(selected_file)
+def display_file(file_obj: File):
+    """Display the file based on its mimetype."""
+    for widget in text_viewer_frame.winfo_children():
+        widget.destroy()
+
+    if file_obj.mimetype == "text/plain":
+        display_text_file(file_obj.path)
+    elif file_obj.mimetype == "image":
+        display_image_file(file_obj.path)
+    else:
+        display_unsupported_file(os.path.basename(file_obj.path))
 
 
-def display_text_file(file_path):
+def display_text_file(file_path: str):
     text_viewer = tk.Text(text_viewer_frame, wrap=tk.WORD)
     text_viewer.pack(fill=tk.BOTH, expand=True)
-    text_viewer_label = tk.Label(text_viewer_frame, text="")
-    text_viewer_label.pack()
     try:
         with open(file_path, "r", encoding="utf-8") as file:
             content = file.read()
-            text_viewer.delete(1.0, tk.END)
             text_viewer.insert(tk.END, content)
-            text_viewer.config(state=tk.NORMAL)
-            text_viewer_label.config(
-                text=f"Viewing Text File: {os.path.basename(file_path)}"
-            )
+            text_viewer.config(state=tk.DISABLED)
+        text_viewer_label.config(
+            text=f"Viewing Text File: {os.path.basename(file_path)}"
+        )
     except Exception as e:
-        text_viewer.delete(1.0, tk.END)
         text_viewer.insert(tk.END, f"Error reading file: {e}")
-        text_viewer.config(state=tk.DISABLED)
         text_viewer_label.config(text="")
 
 
-def display_image_file(file_path):
-    for widget in text_viewer_frame.winfo_children():
-        widget.destroy()
+def display_image_file(file_path: str):
     try:
         img = Image.open(file_path)
-        img.thumbnail(
-            (text_viewer_frame.winfo_width(), text_viewer_frame.winfo_height())
-        )
+        # Thumbnail to fit viewer (adjust size dynamically if needed)
+        img.thumbnail((600, 500))  # Approximate viewer size
         img_tk = ImageTk.PhotoImage(img)
         img_label = tk.Label(text_viewer_frame, image=img_tk)
-        img_label.image = img_tk
+        img_label.image = img_tk  # Keep reference
         img_label.pack(fill=tk.BOTH, expand=True)
-        img_label.config(text=f"Viewing Image File: {os.path.basename(file_path)}")
+        text_viewer_label.config(
+            text=f"Viewing Image File: {os.path.basename(file_path)}"
+        )
     except Exception as e:
         error_label = tk.Label(
             text_viewer_frame, text=f"Error displaying image: {e}", fg="red"
@@ -261,14 +251,12 @@ def display_image_file(file_path):
         error_label.pack()
 
 
-def display_unsupported_file(file_name):
-    for widget in text_viewer_frame.winfo_children():
-        widget.destroy()
+def display_unsupported_file(file_name: str):
     message_label = tk.Label(
         text_viewer_frame,
         text=f"The selected file type is not supported for preview: {file_name}",
         fg="red",
-        wraplength=text_viewer_frame.winfo_width() - 20,
+        wraplength=500,
     )
     message_label.pack(pady=20)
 
@@ -281,27 +269,13 @@ def browse_to_path(event=None):
     if not os.path.isdir(path):
         msgbox.showerror("Not a Directory", "The specified path is not a directory.")
         return
+    dir_obj = get_dir_object(path)
     subdirs_listbox.config(state=tk.NORMAL)
-    subdirs_listbox.delete(0, tk.END)
-    try:
-        subdirs, files = get_folder_contents(path)
-        if not subdirs and not files:
-            subdirs_listbox.insert(tk.END, "No accessible folders or files found.")
-        else:
-            for subdir in subdirs:
-                subdirs_listbox.insert(tk.END, f"[DIR] {subdir}")
-            for file in files:
-                subdirs_listbox.insert(tk.END, f"[FILE] {file}")
-            threading.Thread(
-                target=index_subdirs_background, args=(path,), daemon=True
-            ).start()
-        subdirs_listbox.config(state=tk.NORMAL)
-        drives_listbox.config(state=tk.DISABLED)
-        drives_listbox.unbind("<<ListboxSelect>>")
-        subdirs_listbox.bind("<<ListboxSelect>>", on_subdir_select)
-    except Exception as e:
-        subdirs_listbox.insert(tk.END, f"Error: {e}")
-        subdirs_listbox.config(state=tk.DISABLED)
+    populate_listbox_from_dir(dir_obj, subdirs_listbox)
+    subdirs_listbox.config(state=tk.NORMAL)
+    drives_listbox.config(state=tk.DISABLED)
+    drives_listbox.unbind("<<ListboxSelect>>")
+    subdirs_listbox.bind("<<ListboxSelect>>", lambda e: on_item_select(e, dir_obj))
 
 
 def clear_path_entry():
@@ -319,14 +293,7 @@ def update_path_explorer(path):
     path_explorer_entry.insert(0, path)
 
 
-def process_indexing_queue():
-    while not indexing_queue.empty():
-        subdir_path, subdirs, files = indexing_queue.get()
-        indexed_subdirs[subdir_path] = (subdirs, files)
-        # Optionally, update UI here if you want to show live results
-    root.after(100, process_indexing_queue)
-
-
+# UI Setup
 drives_frame = tk.Frame(root, width=150, bd=2, relief=tk.SUNKEN)
 drives_frame.grid(row=0, column=0, sticky="nsew")
 drives_frame.grid_propagate(False)
@@ -384,7 +351,6 @@ text_viewer_label = tk.Label(
     text_viewer_frame, text="File Viewer", font=("Arial", 12, "bold")
 )
 text_viewer_label.pack()
-text_viewer_label.grid(row=0, column=0, sticky="nsew", pady=5, padx=5)
 
 path_explorer_frame = tk.Frame(root, bd=2, relief=tk.RIDGE)
 path_explorer_frame.grid(row=0, column=1, sticky="new", padx=5, pady=(5, 0))
@@ -393,17 +359,16 @@ path_explorer_label = tk.Label(
     path_explorer_frame, text="Current Path:", font=("Arial", 10)
 )
 path_explorer_label.pack(side=tk.LEFT, padx=5)
-path_explorer_entry = tk.Entry(path_explorer_frame, font=("Consolas", 12), width=70)
+path_explorer_entry = tk.Entry(path_explorer_frame, font=("Consolas", 12), width=1)
 path_explorer_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
 path_explorer_entry.bind("<Return>", browse_to_path)
 clear_entry_btn = tk.Button(path_explorer_frame, text="Clear", command=clear_path_entry)
 clear_entry_btn.pack(side=tk.LEFT, padx=5)
 
-drives_listbox.bind("<<ListboxSelect>>", on_drive_select)
+# Initial setup
 subdirs_listbox.config(state=tk.DISABLED)
 subdirs_listbox.unbind("<<ListboxSelect>>")
 
-process_indexing_queue()
 update_status_bar()
 
 root.mainloop()
