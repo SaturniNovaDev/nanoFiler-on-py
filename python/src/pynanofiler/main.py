@@ -9,6 +9,7 @@ import time
 import threading
 from typing import TypedDict, Union, Optional, Callable, Tuple
 from tkinter import messagebox as msgbox, ttk
+from _tkinter import TclError
 from PIL import Image, ImageTk
 from __init__ import __version__
 
@@ -65,9 +66,7 @@ class Dir:
     def __init__(
         self,
         path: str,
-        metadata: Union[
-            DirMetadata, DirErrorMetadata
-        ],  # Now includes timestamps on success
+        metadata: Union[DirMetadata, DirErrorMetadata],
         subdirs: dict[int, str],
         files: dict[int, File],
     ):
@@ -104,6 +103,9 @@ class NanoFilerApp(tk.Tk):
 
         # Text viewer label
         self.text_viewer_label: Optional[tk.Label] = None
+
+        # Encoders list
+        self.avail_encoders: list = ["utf-8", "utf-16", "utf-8-sig", "utf-16-le"]
 
         # Live refreshing constants
         self.focused_refresh_ms = 10000  # 10 seconds
@@ -155,20 +157,23 @@ class NanoFilerApp(tk.Tk):
         for drive in drives:
             try:
                 self.drives_listbox.insert(tk.END, drive)
-            except Exception as e:
-                error_label = tk.Label(
-                    self.drives_frame,
-                    text=f"Error loading drive {drive}: {e}",
-                    fg="red",
+            except TclError as e:
+                msgbox.showerror(
+                    "Error showing 1 or more drives",
+                    f"Internal program error when using Tkinter library.\nExtended error: {e}.",
                 )
-                error_label.pack()
+            except MemoryError as e:
+                msgbox.showerror(
+                    "Error loading 1 or more drives",
+                    f"Insufficient memory.\nExtended error: {e}.",
+                )
         if not drives:
-            self.drives_listbox.insert(
-                tk.END,
-                "No drives found! Check you have any storage devices connected and correctly "
-                "mounted.",
-            )
+            self.drives_listbox.insert(tk.END)
             self.drives_listbox.config(state=tk.DISABLED)
+            msgbox.showerror(
+                "No drives found!",
+                "No drives found! Check you have any storage devices connected and correctly mounted.",
+            )
         self.drives_listbox.config(exportselection=False)
 
     def _setup_subdirs(self) -> None:
@@ -264,7 +269,15 @@ class NanoFilerApp(tk.Tk):
             ".rtf",
             ".git",
         }
-        image_extensions = {".png", ".jpg", ".jpeg", ".bmp", ".gif", ".tiff"}
+        image_extensions = {
+            ".png",
+            ".jpg",
+            ".jpeg",
+            ".bmp",
+            ".gif",
+            ".tiff",
+            ".svg",
+        }
 
         if extension in text_extensions:
             return "text/plain"
@@ -493,29 +506,57 @@ class NanoFilerApp(tk.Tk):
         self.text_viewer_label.pack()  # Repack at top
 
     def display_text_file(self, file_path: str) -> None:
-        """Opens the specified file using python's default `open` method and reads the
-        file, then displays it in a text area."""
-        # Recreate label with file info before trying to open
-        self._create_viewer_label(f"Viewing Text File: {os.path.basename(file_path)}")
+        """Opens the specified file and displays its content, trying multiple
+        encoders until successful."""
 
+        # 1. Setup UI
+        # Recreate label with file info
+        self._create_viewer_label(f"Viewing Text File: {os.path.basename(file_path)}")
         text_viewer = tk.Text(self.text_viewer_frame, wrap=tk.WORD)
         text_viewer.pack(fill=tk.BOTH, expand=True)
-        try:
-            with open(file_path, "r", encoding="utf-8") as file:
-                content = file.read()
-                text_viewer.insert(tk.END, content)
-                text_viewer.config(state=tk.DISABLED)
-        except PermissionError as e:
-            # Specific handling for permission issues
+
+        content_loaded = False
+        last_error_message = ""  # To store the error if all fail
+
+        # 2. Attempt to read with multiple encoders
+        for encoder in self.avail_encoders:
+            try:
+                with open(file_path, "r", encoding=encoder) as file:
+                    content = file.read()
+                    text_viewer.insert(tk.END, content)
+                    text_viewer.config(state=tk.DISABLED)
+                    content_loaded = True
+                    break
+
+            except UnicodeDecodeError as e:
+                # This is an expected failure for non-matching encoders, skip msgbox
+                last_error_message = f"Decode failed with {encoder}: {e}"
+                continue
+
+            except PermissionError as e:
+                # Specific handling for permission issues (fatal/non-recoverable)
+                last_error_message = f"Error: Cannot read '{os.path.basename(file_path)}', Permission Denied: {e}."
+                content_loaded = False
+                # Show error box immediately since this is a critical system error
+                msgbox.showerror("Permission Error!", last_error_message)
+                break
+
+            except Exception as e:
+                # Catch all other file I/O errors (e.g., file not found, hardware failure)
+                last_error_message = f"Error: Cannot read '{os.path.basename(file_path)}', Unknown I/O Error: {e}."
+                content_loaded = False
+                msgbox.showerror("Error reading file!", last_error_message)
+                break
+
+        # 3. Final error handling if no content was loaded after all attempts
+        if not content_loaded:
+            # Clear text_viewer from any partial attempts/messages before final message
+            text_viewer.delete("1.0", tk.END)
             text_viewer.insert(
-                tk.END, f"Error: Cannot read '{os.path.basename(file_path)}', {e}."
+                tk.END,
+                f"Could not decode file using any available encoder.\n{last_error_message}",
             )
             text_viewer.config(state=tk.DISABLED)
-        except Exception as e:
-            # General errors (e.g., encoding, not found)
-            text_viewer.insert(tk.END, f"Error reading file: {e}")
-            text_viewer.config(state=tk.DISABLED)
-        # No need to config label here—it's already set above
 
     def display_image_file(self, file_path: str) -> None:
         """Displays an image file using `ImageTk`."""
@@ -523,22 +564,31 @@ class NanoFilerApp(tk.Tk):
         self._create_viewer_label(f"Viewing Image File: {os.path.basename(file_path)}")
 
         try:
-            img = Image.open(file_path)
+            if file_path.lower().endswith(".svg"):
+                png_data = cairosvg.svg2png(
+                    url=file_path
+                )  # Convert SVG to PNG if ".svg" detected in the file path
+                img = Image.open(BytesIO(png_data))
+            else:
+                img = Image.open(file_path)
             img.thumbnail((600, 500))
             self._current_image_tk = ImageTk.PhotoImage(img)  # Store reference
             img_label = tk.Label(self.text_viewer_frame, image=self._current_image_tk)
             img_label.pack(fill=tk.BOTH, expand=True)
-        except PermissionError as e:
-            # Handle permission for images too
+        except PermissionError as e:  # Handle permission for images too
             error_label = tk.Label(
                 self.text_viewer_frame,
                 text=f"Error: Cannot open image '{os.path.basename(file_path)}', {e}.",
                 fg="red",
+                font="Consolas",
             )
             error_label.pack(pady=20)
         except Exception as e:
             error_label = tk.Label(
-                self.text_viewer_frame, text=f"Error displaying image: {e}", fg="red"
+                self.text_viewer_frame,
+                text=f"Error displaying image: {e}",
+                fg="red",
+                font="Consolas",
             )
             error_label.pack()
 
@@ -549,6 +599,7 @@ class NanoFilerApp(tk.Tk):
             self.text_viewer_frame,
             text=f"The selected file type is not supported for preview: {file_name}",
             fg="red",
+            font="Consolas",
             wraplength=500,
         )
         message_label.pack(pady=20)
