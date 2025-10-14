@@ -102,6 +102,9 @@ class NanoFilerApp(tk.Tk):
         # Reference image variable to avoid garbage collection from destroying images
         self._current_image_tk: Optional[ImageTk.PhotoImage] = None
 
+        # Text viewer label
+        self.text_viewer_label: Optional[tk.Label] = None
+
         # Live refreshing constants
         self.focused_refresh_ms = 10000  # 10 seconds
         self.unfocused_refresh_ms = 90000  # 1.5 minutes
@@ -433,9 +436,7 @@ class NanoFilerApp(tk.Tk):
         self.drives_listbox.config(state=tk.DISABLED)
         self.drives_listbox.unbind("<<ListboxSelect>>")
         # Async load
-        self.async_get_dir(
-            selected_drive, self.update_ui_from_dir  # type: ignore
-        )
+        self.async_get_dir(selected_drive, self.update_ui_from_dir)  # type: ignore
 
     def on_item_select(self, _event: tk.Event, parent_dir_obj: Dir) -> None:
         """Handles item selection from the file browsing listbox."""
@@ -450,9 +451,7 @@ class NanoFilerApp(tk.Tk):
             self.update_path_explorer(new_path)
             self.show_loading_state()
             # Async load new path
-            self.async_get_dir(
-                new_path, self.update_ui_from_dir
-            )
+            self.async_get_dir(new_path, self.update_ui_from_dir)
         elif selected_item.startswith("[FILE] "):  # type: ignore
             selected_file_name = selected_item[7:]  # type: ignore
             for file_obj in parent_dir_obj.files.values():
@@ -462,8 +461,19 @@ class NanoFilerApp(tk.Tk):
 
     def display_file(self, file_obj: File) -> None:
         """Display the file based on its mimetype."""
+        # Clear existing content widgets (but label will be recreated in sub-methods)
         for widget in self.text_viewer_frame.winfo_children():
-            widget.destroy()
+            if (
+                widget != self.text_viewer_label
+            ):  # Skip if label exists, but we'll recreate anyway
+                widget.destroy()
+        # If label was destroyed previously, recreate it (safe to call multiple times)
+        if (
+            hasattr(self, "text_viewer_label")
+            and not self.text_viewer_label.winfo_exists()
+        ):
+            self.text_viewer_label = None  # Reset invalid ref
+        self._create_viewer_label("File Viewer")  # Repack a default label
 
         if file_obj.mimetype == "text/plain":
             self.display_text_file(file_obj.path)
@@ -472,9 +482,22 @@ class NanoFilerApp(tk.Tk):
         else:
             self.display_unsupported_file(os.path.basename(file_obj.path))
 
+    def _create_viewer_label(self, text: str) -> None:
+        """Helper to create/repack the viewer label (avoids destruction issues)."""
+        # Destroy existing label if invalid
+        if hasattr(self, "text_viewer_label") and self.text_viewer_label.winfo_exists():
+            self.text_viewer_label.destroy()
+        self.text_viewer_label = tk.Label(
+            self.text_viewer_frame, text=text, font=("Arial", 12, "bold")
+        )
+        self.text_viewer_label.pack()  # Repack at top
+
     def display_text_file(self, file_path: str) -> None:
         """Opens the specified file using python's default `open` method and reads the
         file, then displays it in a text area."""
+        # Recreate label with file info before trying to open
+        self._create_viewer_label(f"Viewing Text File: {os.path.basename(file_path)}")
+
         text_viewer = tk.Text(self.text_viewer_frame, wrap=tk.WORD)
         text_viewer.pack(fill=tk.BOTH, expand=True)
         try:
@@ -482,28 +505,37 @@ class NanoFilerApp(tk.Tk):
                 content = file.read()
                 text_viewer.insert(tk.END, content)
                 text_viewer.config(state=tk.DISABLED)
-            # Optionally show timestamps from metadata, but for now just filename
-            self.text_viewer_label.config(
-                text=f"Viewing Text File: {os.path.basename(file_path)}"
+        except PermissionError as e:
+            # Specific handling for permission issues
+            text_viewer.insert(
+                tk.END, f"Error: Cannot read '{os.path.basename(file_path)}', {e}."
             )
+            text_viewer.config(state=tk.DISABLED)
         except Exception as e:
+            # General errors (e.g., encoding, not found)
             text_viewer.insert(tk.END, f"Error reading file: {e}")
-            self.text_viewer_label.config(text="")
+            text_viewer.config(state=tk.DISABLED)
+        # No need to config label here—it's already set above
 
     def display_image_file(self, file_path: str) -> None:
         """Displays an image file using `ImageTk`."""
-        for widget in self.text_viewer_frame.winfo_children():
-            widget.destroy()  # Ensure existing widgets are cleared
+        # Recreate label first
+        self._create_viewer_label(f"Viewing Image File: {os.path.basename(file_path)}")
 
         try:
             img = Image.open(file_path)
             img.thumbnail((600, 500))
-            self._current_image_tk = ImageTk.PhotoImage(img) # Store the reference on 'self'
+            self._current_image_tk = ImageTk.PhotoImage(img)  # Store reference
             img_label = tk.Label(self.text_viewer_frame, image=self._current_image_tk)
             img_label.pack(fill=tk.BOTH, expand=True)
-            self.text_viewer_label.config(
-                text=f"Viewing Image File: {os.path.basename(file_path)}"
+        except PermissionError as e:
+            # Handle permission for images too
+            error_label = tk.Label(
+                self.text_viewer_frame,
+                text=f"Error: Cannot open image '{os.path.basename(file_path)}', {e}.",
+                fg="red",
             )
+            error_label.pack(pady=20)
         except Exception as e:
             error_label = tk.Label(
                 self.text_viewer_frame, text=f"Error displaying image: {e}", fg="red"
@@ -512,6 +544,7 @@ class NanoFilerApp(tk.Tk):
 
     def display_unsupported_file(self, file_name: str) -> None:
         """Displays an error text for unsupported filetypes."""
+        self._create_viewer_label(f"Unsupported File: {file_name}")
         message_label = tk.Label(
             self.text_viewer_frame,
             text=f"The selected file type is not supported for preview: {file_name}",
