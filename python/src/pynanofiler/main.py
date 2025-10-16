@@ -10,6 +10,7 @@ import threading
 from typing import TypedDict, Union, Optional, Callable, Tuple
 from tkinter import messagebox as msgbox, ttk
 import mimetypes
+import tksvg
 from _tkinter import TclError
 from PIL import Image, ImageTk
 from __init__ import __version__
@@ -83,7 +84,7 @@ class NanoFilerApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("NanoFiler" + __version__)
-        self.geometry("900x700")
+        self.geometry("1000x700")
 
         self.grid_rowconfigure(0, weight=15)
         self.grid_rowconfigure(1, weight=85)
@@ -101,7 +102,7 @@ class NanoFilerApp(tk.Tk):
 
         self.text_viewer_label: Optional[tk.Label] = None
 
-        self.avail_encoders: list = ["utf-8", "utf-16", "utf-8-sig", "utf-16-le"]
+        self.avail_encoders: list[str] = ["utf-8", "utf-16", "utf-8-sig", "utf-16-le"]
 
         self.focused_refresh_ms = 10000  # 10 seconds
         self.unfocused_refresh_ms = 90000  # 1.5 minutes
@@ -464,55 +465,62 @@ class NanoFilerApp(tk.Tk):
         content_loaded = False
         last_error_message = ""
 
-        for encoder in self.avail_encoders:
-            try:
-                with open(file_path, "r", encoding=encoder) as file:
-                    content = file.read()
-                    text_viewer.insert(tk.END, content)
-                    text_viewer.config(state=tk.DISABLED)
-                    content_loaded = True
+        if file_path.lower().endswith(".iso"):
+            msgbox.showerror("HAVE YOU GONE MAD???!", "HAVE YOU GONE MAD???! Please do not try that again!\nI don't know what your hyperfixation with trying to crash this program is about. Please stay AWAY from this kind of files!")
+        else:
+            for encoder in self.avail_encoders:
+                try:
+                    with open(file_path, "r", encoding=encoder) as file:
+                        content = file.read()
+                        text_viewer.insert(tk.END, content)
+                        text_viewer.config(state=tk.DISABLED)
+                        content_loaded = True
+                        break
+
+                except PermissionError as e:
+                    last_error_message = f"Error: Cannot read '{os.path.basename(file_path)}', Permission Denied: {e}."
+                    content_loaded = False
+                    msgbox.showerror("Permission Error!", last_error_message)
                     break
 
-            except PermissionError as e:
-                last_error_message = f"Error: Cannot read '{os.path.basename(file_path)}', Permission Denied: {e}."
-                content_loaded = False
-                msgbox.showerror("Permission Error!", last_error_message)
-                break
+                except UnicodeDecodeError as e:
+                    last_error_message = (
+                        f"Failed to decode file with encoder {encoder}: {e}."
+                    )
+                    continue
 
-            except UnicodeDecodeError as e:
-                last_error_message = (
-                    f"Failed to decode file with encoder {encoder}: {e}."
+                except Exception as e:
+                    last_error_message = f"Error: Cannot read '{os.path.basename(file_path)}', Unknown I/O Error: {e}."
+                    content_loaded = False
+                    msgbox.showerror("Error reading file!", last_error_message)
+                    break
+
+            if not content_loaded:
+                text_viewer.delete("1.0", tk.END)
+                text_viewer.insert(
+                    tk.END,
+                    f"[!] Could not load file contents.\n{last_error_message}",
                 )
-                continue
-
-            except Exception as e:
-                last_error_message = f"Error: Cannot read '{os.path.basename(file_path)}', Unknown I/O Error: {e}."
-                content_loaded = False
-                msgbox.showerror("Error reading file!", last_error_message)
-                break
-
-        if not content_loaded:
-            text_viewer.delete("1.0", tk.END)
-            text_viewer.insert(
-                tk.END,
-                f"[!] Could not load file contents.\n{last_error_message}",
-            )
-            text_viewer.config(state=tk.DISABLED)
+                text_viewer.config(state=tk.DISABLED)
 
     def display_image_file(self, file_path: str) -> None:
         """Displays an image file using `ImageTk`."""
         self._create_viewer_label(f"Viewing Image File: {os.path.basename(file_path)}")
 
         try:
-            # if file_path.lower().endswith(".svg"):
-            #     img = Image.open(file_path)
-            # else:
-            #     img = Image.open(file_path)
-            img = Image.open(file_path)
-            img.thumbnail((600, 500))
-            self._current_image_tk = ImageTk.PhotoImage(img)
-            img_label = tk.Label(self.text_viewer_frame, image=self._current_image_tk)
-            img_label.pack(fill=tk.BOTH, expand=True)
+            if file_path.lower().endswith(".svg"):
+                svg_image = tksvg.SvgImage(file=file_path, scale=0.25)
+                svg_label = tk.Label(self.text_viewer_frame, image=svg_image)
+                svg_label.image = svg_image
+                svg_label.pack(fill=tk.BOTH, expand=True)
+            else:
+                img = Image.open(file_path)
+                img.thumbnail((600, 500))
+                self._current_image_tk = ImageTk.PhotoImage(img)
+                img_label = tk.Label(
+                    self.text_viewer_frame, image=self._current_image_tk
+                )
+                img_label.pack(fill=tk.BOTH, expand=True)
         except PermissionError as e:
             error_label = tk.Label(
                 self.text_viewer_frame,
@@ -521,6 +529,10 @@ class NanoFilerApp(tk.Tk):
                 font="Consolas",
             )
             error_label.pack(pady=20)
+            msgbox.showerror(
+                "Permission Error!",
+                f"An error ocurred while trying to read '{os.path.basename(file_path)}'. {e}",
+            )
         except Exception as e:
             error_label = tk.Label(
                 self.text_viewer_frame,
@@ -529,6 +541,10 @@ class NanoFilerApp(tk.Tk):
                 font="Consolas",
             )
             error_label.pack()
+            msgbox.showerror(
+                "Error!",
+                f"An error ocurred while trying to read '{os.path.basename(file_path)}'. {e}",
+            )
 
     def browse_to_path(self, _event: Optional[tk.Event] = None) -> None:
         """Checks if the entered path exists before getting the dir."""
