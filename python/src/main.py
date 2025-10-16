@@ -1,6 +1,6 @@
 """Main module from nanoFiler in Python."""
 
-from functools import partial  # For threading with instance methods
+from functools import partial
 from ctypes import windll
 import tkinter as tk
 import os
@@ -83,7 +83,8 @@ class NanoFilerApp(tk.Tk):
 
     def __init__(self):
         super().__init__()
-        self.title("NanoFiler" + __version__)
+        self.title("NanoFiler " + __version__)
+        self.iconbitmap("python/src/media/icon.ico")
         self.geometry("1000x700")
 
         self.grid_rowconfigure(0, weight=15)
@@ -114,7 +115,6 @@ class NanoFilerApp(tk.Tk):
         self._setup_path_explorer()
         self._setup_bindings()
 
-        # Initialize
         self.update_status_bar()
         self.schedule_live_refresh()
 
@@ -420,7 +420,6 @@ class NanoFilerApp(tk.Tk):
             new_path = os.path.join(parent_dir_obj.path, selected_dir_name)
             self.update_path_explorer(new_path)
             self.show_loading_state()
-            # Async load new path
             self.async_get_dir(new_path, self.update_ui_from_dir)
         elif selected_item.startswith("[FILE] "):
             selected_file_name = selected_item[7:]
@@ -466,7 +465,10 @@ class NanoFilerApp(tk.Tk):
         last_error_message = ""
 
         if file_path.lower().endswith(".iso"):
-            msgbox.showerror("HAVE YOU GONE MAD???!", "HAVE YOU GONE MAD???! Please do not try that again!\nI don't know what your hyperfixation with trying to crash this program is about. Please stay AWAY from this kind of files!")
+            msgbox.showerror(
+                "HAVE YOU GONE MAD???!",
+                "HAVE YOU GONE MAD???! Please do not try that again!\nI don't know what your hyperfixation with trying to crash this program is about. Please stay AWAY from this kind of files!",
+            )
         else:
             for encoder in self.avail_encoders:
                 try:
@@ -595,7 +597,6 @@ class NanoFilerApp(tk.Tk):
         self.after(200, self.update_status_bar)
 
 
-# Run the application
 if __name__ == "__main__":
     app = NanoFilerApp()
     app.mainloop()
