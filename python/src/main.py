@@ -172,7 +172,8 @@ class NanoFilerApp(tk.Tk):
             self.drives_listbox.config(state=tk.DISABLED)
             msgbox.showerror(
                 "No drives found!",
-                "No drives found! Check you have any storage devices connected and correctly mounted.",
+                "No drives found! Check you have any storage devices connected and "
+                + "correctly mounted.",
             )
         self.drives_listbox.config(exportselection=False)
 
@@ -467,7 +468,8 @@ class NanoFilerApp(tk.Tk):
         if file_path.lower().endswith(".iso"):
             msgbox.showerror(
                 "HAVE YOU GONE MAD???!",
-                "HAVE YOU GONE MAD???! Please do not try that again!\nI don't know what your hyperfixation with trying to crash this program is about. Please stay AWAY from this kind of files!",
+                "HAVE YOU GONE MAD???! Please do not try that again."
+                + "\nStay AWAY from this kind of files!",
             )
         else:
             for encoder in self.avail_encoders:
@@ -511,7 +513,7 @@ class NanoFilerApp(tk.Tk):
 
         try:
             if file_path.lower().endswith(".svg"):
-                svg_image = tksvg.SvgImage(file=file_path, scale=0.25)
+                svg_image = tksvg.SvgImage(file=file_path, scale=1)
                 svg_label = tk.Label(self.text_viewer_frame, image=svg_image)
                 svg_label.image = svg_image
                 svg_label.pack(fill=tk.BOTH, expand=True)
