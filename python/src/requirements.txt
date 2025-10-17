@@ -1,5 +1,2 @@
 tksvg
-PIL
-tkinter
-ctypes
-typing
+pillow
