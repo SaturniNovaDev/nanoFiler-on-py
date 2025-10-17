@@ -1,0 +1,5 @@
+tksvg
+PIL
+tkinter
+ctypes
+typing
