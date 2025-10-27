@@ -6,15 +6,19 @@ from setuptools import setup, find_packages
 
 
 HERE = Path(__file__).parent
-README = (HERE / "README.md").read_text(encoding="utf-8") if (HERE / "README.md").exists() else ""
+README = (
+    (HERE / "README.md").read_text(encoding="utf-8")
+    if (HERE / "README.md").exists()
+    else ""
+)
 
 setup(
-    name="nanoFiler-on-py",                      # package name on PyPI
-    version="0.1.0",                             # follow semver
-    description="Short one-line description",    # short description
+    name="nanoFiler-on-py",
+    version="0.4.0",
+    description="File manager and explorer built on python with performance and optimisation in mind.",
     long_description=README,
     long_description_content_type="text/markdown",
-    author="Your Name",
+    author="Peter Knows",
     author_email="peterknows24@protonmail.com",
     url="https://github.com/SaturniNovaDev/nanoFiler-on-py",
     packages=find_packages(exclude=("tests", "docs")),
@@ -24,7 +28,10 @@ setup(
         # "requests>=2.25.1",
     ],
     extras_require={
-        "dev": ["pytest", "flake8"],
+        "dev": [
+            "pytest>=6.2.4",
+            "flake8>=3.9.2",
+        ],
     },
     entry_points={
         # create console script: `nano-filer` -> nano_filer.cli:main
@@ -35,8 +42,9 @@ setup(
     classifiers=[
         "Development Status :: 3 - Alpha",
         "Intended Audience :: Developers",
-        "License :: OSI Approved :: MIT License",
-        "Programming Language :: Python :: 3",
+        "License :: OSI Approved :: GPLv3 License",
+        "Operating System :: Windows",
+        "Programming Language :: Python :: 3.8",
     ],
     project_urls={
         "Source": "https://github.com/SaturniNovaDev/nanoFiler-on-py",
