@@ -3,3 +3,5 @@ optimisation in mind."""
 
 __version__:str = "0.3.92"
 __author__:str = "Peter"
+
+from . import submodules
