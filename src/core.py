@@ -8,11 +8,12 @@ import string
 import time
 import threading
 from typing import TypedDict, Union, Optional, Callable, Tuple
-from tkinter import messagebox as msgbox, ttk
+from tkinter import messagebox as msgbox, ttk, simpledialog
 import mimetypes
 import tksvg
 from _tkinter import TclError
 from PIL import Image, ImageTk
+import shutil
 from __init__ import __version__
 
 
@@ -84,7 +85,7 @@ class NanoFilerApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("NanoFiler " + __version__)
-        self.iconbitmap("python/src/media/icon.ico")
+        self.iconbitmap("src/media/icon.ico")
         self.geometry("1000x700")
 
         self.grid_rowconfigure(0, weight=15)
@@ -108,12 +109,17 @@ class NanoFilerApp(tk.Tk):
         self.focused_refresh_ms = 10000  # 10 seconds
         self.unfocused_refresh_ms = 90000  # 1.5 minutes
 
+        # clipboard for copy / cut operations
+        self._clipboard_path: Optional[str] = None
+        self._clipboard_action: Optional[str] = None  # "copy" or "cut"
+
         self._setup_status_bar()
         self._setup_drives()
         self._setup_subdirs()
         self._setup_file_viewer()
         self._setup_path_explorer()
         self._setup_bindings()
+        self._create_context_menu()
 
         self.update_status_bar()
         self.schedule_live_refresh()
@@ -243,6 +249,135 @@ class NanoFilerApp(tk.Tk):
         self.bind("<FocusOut>", self.on_focus_out)
         self.subdirs_listbox.config(state=tk.DISABLED)
         self.subdirs_listbox.unbind("<<ListboxSelect>>")
+        # right click (Windows: Button-3)
+        self.subdirs_listbox.bind("<Button-3>", self._on_right_click)
+
+    def _create_context_menu(self) -> None:
+        """Create right-click menu for file/folder operations."""
+        self._ctx_menu = tk.Menu(self, tearoff=0)
+        self._ctx_menu.add_command(label="Rename...", command=self.rename_selected)
+        self._ctx_menu.add_separator()
+        self._ctx_menu.add_command(label="Copy", command=self.copy_selected)
+        self._ctx_menu.add_command(label="Cut", command=self.cut_selected)
+        self._ctx_menu.add_command(label="Paste", command=self.paste_clipboard)
+        self._ctx_menu.add_separator()
+        self._ctx_menu.add_command(label="Delete", command=self.delete_selected)
+
+    def _on_right_click(self, event: tk.Event) -> None:
+        """Select the listbox item under the mouse and show context menu."""
+        if self.subdirs_listbox.cget("state") == tk.DISABLED:
+            return
+        idx = self.subdirs_listbox.nearest(event.y)
+        if idx is None or idx >= self.subdirs_listbox.size():
+            return
+        # select clicked item
+        self.subdirs_listbox.selection_clear(0, tk.END)
+        self.subdirs_listbox.selection_set(idx)
+        try:
+            self._ctx_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            self._ctx_menu.grab_release()
+
+    def _resolve_selected_path(self) -> Optional[tuple[str, bool]]:
+        """Return (path, is_dir) for the currently selected listbox item, or None."""
+        sel = self.subdirs_listbox.curselection()
+        if not sel or not self.current_dir:
+            return None
+        item = self.subdirs_listbox.get(sel[0])
+        if item.startswith("[DIR] "):
+            name = item[6:]
+            return (os.path.join(self.current_dir.path, name), True)
+        if item.startswith("[FILE] "):
+            name = item[7:]
+            for f in self.current_dir.files.values():
+                if os.path.basename(f.path) == name:
+                    return (f.path, False)
+        return None
+
+    def _run_fs_op(self, func: Callable[[], None]) -> None:
+        """Run a filesystem operation in a thread and refresh current dir afterwards."""
+        def worker() -> None:
+            try:
+                func()
+            except Exception as e:
+                self.after(0, lambda: msgbox.showerror("FS Error", str(e)))
+            finally:
+                # refresh current directory view
+                if self.current_dir:
+                    self.async_get_dir(self.current_dir.path, self.update_ui_from_dir)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def rename_selected(self) -> None:
+        resolved = self._resolve_selected_path()
+        if not resolved:
+            return
+        src_path, _is_dir = resolved
+        new_name = simpledialog.askstring("Rename", "Enter new name:", initialvalue=os.path.basename(src_path))
+        if not new_name:
+            return
+        dest = os.path.join(os.path.dirname(src_path), new_name)
+        def op() -> None:
+            os.rename(src_path, dest)
+        self._run_fs_op(op)
+
+    def copy_selected(self) -> None:
+        resolved = self._resolve_selected_path()
+        if not resolved:
+            return
+        self._clipboard_path = resolved[0]
+        self._clipboard_action = "copy"
+        # small UX feedback
+        self.status_label.config(text=f"Copied to clipboard: {os.path.basename(self._clipboard_path)}")
+
+    def cut_selected(self) -> None:
+        resolved = self._resolve_selected_path()
+        if not resolved:
+            return
+        self._clipboard_path = resolved[0]
+        self._clipboard_action = "cut"
+        self.status_label.config(text=f"Cut to clipboard: {os.path.basename(self._clipboard_path)}")
+
+    def paste_clipboard(self) -> None:
+        if not self._clipboard_path or not self._clipboard_action:
+            msgbox.showinfo("Paste", "Clipboard is empty.")
+            return
+        if not self.current_dir or not self.current_dir.path:
+            msgbox.showerror("Paste error", "No destination folder selected.")
+            return
+        src = self._clipboard_path
+        base = os.path.basename(src)
+        dest = os.path.join(self.current_dir.path, base)
+        def op() -> None:
+            if os.path.exists(dest):
+                raise FileExistsError(f"Destination already exists: {dest}")
+            if self._clipboard_action == "copy":
+                if os.path.isdir(src):
+                    shutil.copytree(src, dest)
+                else:
+                    shutil.copy2(src, dest)
+            else:  # cut -> move
+                shutil.move(src, dest)
+            # clear clipboard on move
+            if self._clipboard_action == "cut":
+                self._clipboard_path = None
+                self._clipboard_action = None
+        self._run_fs_op(op)
+
+    def delete_selected(self) -> None:
+        resolved = self._resolve_selected_path()
+        if not resolved:
+            return
+        path, is_dir = resolved
+        confirm = msgbox.askyesno("Delete", f"Delete '{os.path.basename(path)}'? This cannot be undone.")
+        if not confirm:
+            return
+        def op() -> None:
+            if is_dir:
+                shutil.rmtree(path)
+            else:
+                os.remove(path)
+        self._run_fs_op(op)
 
     @staticmethod
     def get_mimetype(file_name: str) -> str:
