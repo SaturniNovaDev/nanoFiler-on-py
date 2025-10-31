@@ -1,4 +1,4 @@
-![The nanoFiler logo.](https://github.com/SaturniNovaDev/nanoFiler-on-py/blob/main/python/src/media/icon.png)
+![The nanoFiler logo.](https://github.com/SaturniNovaDev/nanoFiler-on-py/blob/main/src/media/icon.png)
 # A file explorer built on Python with performance in mind.
 This is a file explorer with a GUI built on tkinter I made with my co-worker @AndrewsVeloz as an experiment for building apps 
 with Python, and also to get started on GitHub and Git, see other repos and do what the pros 
