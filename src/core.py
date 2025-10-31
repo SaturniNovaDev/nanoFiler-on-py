@@ -85,7 +85,24 @@ class NanoFilerApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("NanoFiler " + __version__)
-        self.iconbitmap("src/media/icon.ico")
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        ico_path = os.path.join(base_dir, "media", "icon.ico")
+        png_path = os.path.join(base_dir, "media", "icon.png")
+        print(ico_path, png_path)
+
+        if os.path.exists(ico_path) and os.name == "nt":
+            # Windows: .ico works with iconbitmap
+            self.iconbitmap(ico_path)
+        else:
+            # Fallback (Linux/macOS): use a PNG via iconphoto
+            if os.path.exists(png_path):
+                try:
+                    img = tk.PhotoImage(file=png_path)
+                    self.iconphoto(True, img)
+                    # keep reference so it isn't garbage-collected
+                    self._icon_img = img
+                except Exception:
+                    pass
         self.geometry("1000x700")
 
         self.grid_rowconfigure(0, weight=15)
@@ -296,6 +313,7 @@ class NanoFilerApp(tk.Tk):
 
     def _run_fs_op(self, func: Callable[[], None]) -> None:
         """Run a filesystem operation in a thread and refresh current dir afterwards."""
+
         def worker() -> None:
             try:
                 func()
@@ -313,12 +331,16 @@ class NanoFilerApp(tk.Tk):
         if not resolved:
             return
         src_path, _is_dir = resolved
-        new_name = simpledialog.askstring("Rename", "Enter new name:", initialvalue=os.path.basename(src_path))
+        new_name = simpledialog.askstring(
+            "Rename", "Enter new name:", initialvalue=os.path.basename(src_path)
+        )
         if not new_name:
             return
         dest = os.path.join(os.path.dirname(src_path), new_name)
+
         def op() -> None:
             os.rename(src_path, dest)
+
         self._run_fs_op(op)
 
     def copy_selected(self) -> None:
@@ -328,7 +350,9 @@ class NanoFilerApp(tk.Tk):
         self._clipboard_path = resolved[0]
         self._clipboard_action = "copy"
         # small UX feedback
-        self.status_label.config(text=f"Copied to clipboard: {os.path.basename(self._clipboard_path)}")
+        self.status_label.config(
+            text=f"Copied to clipboard: {os.path.basename(self._clipboard_path)}"
+        )
 
     def cut_selected(self) -> None:
         resolved = self._resolve_selected_path()
@@ -336,7 +360,9 @@ class NanoFilerApp(tk.Tk):
             return
         self._clipboard_path = resolved[0]
         self._clipboard_action = "cut"
-        self.status_label.config(text=f"Cut to clipboard: {os.path.basename(self._clipboard_path)}")
+        self.status_label.config(
+            text=f"Cut to clipboard: {os.path.basename(self._clipboard_path)}"
+        )
 
     def paste_clipboard(self) -> None:
         if not self._clipboard_path or not self._clipboard_action:
@@ -348,6 +374,7 @@ class NanoFilerApp(tk.Tk):
         src = self._clipboard_path
         base = os.path.basename(src)
         dest = os.path.join(self.current_dir.path, base)
+
         def op() -> None:
             if os.path.exists(dest):
                 raise FileExistsError(f"Destination already exists: {dest}")
@@ -362,6 +389,7 @@ class NanoFilerApp(tk.Tk):
             if self._clipboard_action == "cut":
                 self._clipboard_path = None
                 self._clipboard_action = None
+
         self._run_fs_op(op)
 
     def delete_selected(self) -> None:
@@ -369,14 +397,18 @@ class NanoFilerApp(tk.Tk):
         if not resolved:
             return
         path, is_dir = resolved
-        confirm = msgbox.askyesno("Delete", f"Delete '{os.path.basename(path)}'? This cannot be undone.")
+        confirm = msgbox.askyesno(
+            "Delete", f"Delete '{os.path.basename(path)}'? This cannot be undone."
+        )
         if not confirm:
             return
+
         def op() -> None:
             if is_dir:
                 shutil.rmtree(path)
             else:
                 os.remove(path)
+
         self._run_fs_op(op)
 
     @staticmethod
