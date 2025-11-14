@@ -1,2 +1,12 @@
+functools
+ctypes
+tkinter
+os
+string
+time
+threading
+typing
+mimetypes
 tksvg
 Pillow
+shutil
